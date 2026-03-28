@@ -1,0 +1,5 @@
+{
+  "name": "SRT Translator to Vietnamese",
+  "description": "Translate SRT subtitle files to Vietnamese while preserving the original structure using Gemini AI.",
+  "requestFramePermissions": []
+}
