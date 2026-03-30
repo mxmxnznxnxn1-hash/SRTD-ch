@@ -51,12 +51,14 @@ export function stringifySRT(blocks: SubtitleBlock[]): string {
 export async function translateSubtitleBlocks(
   blocks: SubtitleBlock[],
   onProgress: (progress: number) => void,
-  customApiKey?: string
+  customApiKey?: string,
+  context?: string,
+  genre?: string,
+  tone?: string
 ): Promise<SubtitleBlock[]> {
-  const batchSize = 15;
-  const translatedBlocks: SubtitleBlock[] = [];
-
-  // Use custom key if provided, otherwise fallback to env keys
+  const batchSize = 30; // Increased batch size
+  const translatedBlocks: SubtitleBlock[] = new Array(blocks.length);
+  
   const activeKeys = customApiKey 
     ? customApiKey.split(/[\n,]/).map(k => k.trim()).filter(k => k !== "")
     : (process.env.GEMINI_API_KEY || "").split(/[\n,]/).map(k => k.trim()).filter(k => k !== "");
@@ -65,22 +67,24 @@ export async function translateSubtitleBlocks(
     throw new Error("Vui lòng nhập API Key trong phần cài đặt.");
   }
 
-  const getAI = (index: number) => {
-    const key = activeKeys[index % activeKeys.length];
-    return new GoogleGenAI({ apiKey: key });
-  };
+  const aiInstances = activeKeys.map(key => new GoogleGenAI({ apiKey: key }));
+  
+  // Helper for delay
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-  for (let i = 0; i < blocks.length; i += batchSize) {
-    const batchIndex = Math.floor(i / batchSize);
-    const ai = getAI(batchIndex);
-    
-    const batch = blocks.slice(i, i + batchSize);
+  // Function to translate a single batch with retry logic
+  const translateBatch = async (batch: SubtitleBlock[], startIndex: number, aiIndex: number, attempt = 1): Promise<void> => {
+    const ai = aiInstances[aiIndex % aiInstances.length];
     const textsToTranslate = batch.map((b) => b.text);
 
     const prompt = `Translate the following subtitle lines into Vietnamese. 
 Keep the translation natural and concise. 
 Maintain the same number of lines in the output.
 Separate each translation with a unique delimiter "|||".
+
+${genre ? `Genre: ${genre}\n` : ""}
+${tone ? `Tone/Emotion: ${tone}\n` : ""}
+${context ? `Context/Glossary:\n${context}\n` : ""}
 
 Subtitles:
 ${textsToTranslate.join("\n|||\n")}
@@ -96,20 +100,62 @@ ${textsToTranslate.join("\n|||\n")}
       const translations = translatedText.split("|||").map((t) => t.trim());
 
       batch.forEach((block, index) => {
-        translatedBlocks.push({
+        translatedBlocks[startIndex + index] = {
           ...block,
-          text: translations[index] || block.text, // Fallback to original if translation fails
-        });
+          text: translations[index] || block.text,
+        };
       });
-    } catch (error) {
-      console.error(`Translation error with key index ${batchIndex % apiKeys.length}:`, error);
-      // Fallback for the whole batch
-      batch.forEach((block) => {
-        translatedBlocks.push({ ...block });
-      });
-    }
+    } catch (error: any) {
+      const isRateLimit = error?.message?.includes("429") || error?.message?.toLowerCase().includes("quota");
+      
+      if (isRateLimit && attempt <= 5) {
+        // Wait longer for each retry (exponential backoff)
+        const waitTime = attempt * 5000 + Math.random() * 2000;
+        await sleep(waitTime);
+        return translateBatch(batch, startIndex, aiIndex, attempt + 1);
+      } else if (attempt <= 3) {
+        // Other errors, retry a few times
+        await sleep(2000);
+        return translateBatch(batch, startIndex, aiIndex, attempt + 1);
+      }
 
-    onProgress(Math.min(100, Math.round(((i + batchSize) / blocks.length) * 100)));
+      // Final fallback: keep original text
+      batch.forEach((block, index) => {
+        translatedBlocks[startIndex + index] = { ...block };
+      });
+      console.error(`Failed to translate batch at ${startIndex} after ${attempt} attempts:`, error);
+    }
+  };
+
+  // Process batches with controlled concurrency
+  const maxConcurrency = activeKeys.length;
+  const batches = [];
+  for (let i = 0; i < blocks.length; i += batchSize) {
+    batches.push({
+      batch: blocks.slice(i, i + batchSize),
+      index: i
+    });
+  }
+
+  let completed = 0;
+  const totalBatches = batches.length;
+
+  // Process in chunks to avoid overwhelming the system
+  for (let i = 0; i < totalBatches; i += maxConcurrency) {
+    const currentChunk = batches.slice(i, i + maxConcurrency);
+    await Promise.all(currentChunk.map((item, idx) => 
+      translateBatch(item.batch, item.index, idx).then(() => {
+        completed++;
+        onProgress(Math.min(100, Math.round((completed / totalBatches) * 100)));
+      })
+    ));
+    
+    // Small delay between chunks to respect rate limits
+    if (activeKeys.length === 1) {
+      await sleep(3000); // Wait 3s if only 1 key
+    } else {
+      await sleep(1000); // Wait 1s if multiple keys
+    }
   }
 
   return translatedBlocks;

@@ -9,7 +9,10 @@ import {
   CheckCircle2, 
   AlertCircle,
   X,
-  FileUp
+  FileUp,
+  Info,
+  Sparkles,
+  Smile
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn, playSuccessSound } from "./lib/utils";
@@ -25,6 +28,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("gemini_api_key") || "");
+  const [context, setContext] = useState(() => localStorage.getItem("translation_context") || "");
+  const [genre, setGenre] = useState(() => localStorage.getItem("translation_genre") || "");
+  const [tone, setTone] = useState(() => localStorage.getItem("translation_tone") || "");
   const [showSettings, setShowSettings] = useState(false);
   const [isCheckingKeys, setIsCheckingKeys] = useState(false);
   const [keyStatuses, setKeyStatuses] = useState<Record<string, "valid" | "invalid" | "checking" | null>>({});
@@ -74,7 +80,10 @@ export default function App() {
       const translatedBlocks = await translateSubtitleBlocks(
         blocks, 
         (p) => setProgress(p),
-        apiKey
+        apiKey,
+        context,
+        genre,
+        tone
       );
 
       const result = stringifySRT(translatedBlocks);
@@ -94,6 +103,21 @@ export default function App() {
     // Reset statuses and summary when keys change
     setKeyStatuses({});
     setCheckSummary(null);
+  };
+
+  const saveContext = (val: string) => {
+    setContext(val);
+    localStorage.setItem("translation_context", val);
+  };
+
+  const saveGenre = (val: string) => {
+    setGenre(val);
+    localStorage.setItem("translation_genre", val);
+  };
+
+  const saveTone = (val: string) => {
+    setTone(val);
+    localStorage.setItem("translation_tone", val);
   };
 
   const handleCheckKeys = async () => {
@@ -281,6 +305,68 @@ export default function App() {
                   <p className="text-[10px] text-[#1A1A1A]/40 italic">
                     * Bạn có thể nhập nhiều Key (mỗi dòng 1 key) để tăng tốc độ dịch và tránh bị giới hạn.
                   </p>
+
+                  <div className="pt-4 border-t border-[#1A1A1A]/5 space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider opacity-60">
+                          <Sparkles size={12} />
+                          Bối cảnh / Thể loại
+                        </div>
+                        <select 
+                          value={genre}
+                          onChange={(e) => saveGenre(e.target.value)}
+                          className="w-full bg-white border border-[#1A1A1A]/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#FF6321]/20 focus:border-[#FF6321]"
+                        >
+                          <option value="">Mặc định</option>
+                          <option value="Tu tiên / Huyền huyễn">Tu tiên / Huyền huyễn</option>
+                          <option value="Đô thị / Hiện đại">Đô thị / Hiện đại</option>
+                          <option value="Linh dị / Ma quái">Linh dị / Ma quái</option>
+                          <option value="Kinh dị / Giật gân">Kinh dị / Giật gân</option>
+                          <option value="Hành động / Võ thuật">Hành động / Võ thuật</option>
+                          <option value="Tình cảm / Ngôn tình">Tình cảm / Ngôn tình</option>
+                          <option value="Cổ trang / Kiếm hiệp">Cổ trang / Kiếm hiệp</option>
+                          <option value="Khoa học viễn tưởng">Khoa học viễn tưởng</option>
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider opacity-60">
+                          <Smile size={12} />
+                          Cảm xúc / Giọng điệu
+                        </div>
+                        <select 
+                          value={tone}
+                          onChange={(e) => saveTone(e.target.value)}
+                          className="w-full bg-white border border-[#1A1A1A]/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#FF6321]/20 focus:border-[#FF6321]"
+                        >
+                          <option value="">Mặc định</option>
+                          <option value="Hài hước / Vui vẻ">Hài hước / Vui vẻ</option>
+                          <option value="Nghiêm túc / Trang trọng">Nghiêm túc / Trang trọng</option>
+                          <option value="Cảm động / Buồn">Cảm động / Buồn</option>
+                          <option value="Kịch tính / Căng thẳng">Kịch tính / Căng thẳng</option>
+                          <option value="Lãng mạn / Ngọt ngào">Lãng mạn / Ngọt ngào</option>
+                          <option value="Lạnh lùng / Bí ẩn">Lạnh lùng / Bí ẩn</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider opacity-60">
+                        <Info size={14} />
+                        Thuật ngữ / Xưng hô riêng
+                      </div>
+                      <textarea 
+                        value={context}
+                        onChange={(e) => saveContext(e.target.value)}
+                        placeholder="Ví dụ: John (nam, xưng 'tôi'), Mary (nữ, xưng 'em')..."
+                        rows={2}
+                        className="w-full bg-white border border-[#1A1A1A]/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#FF6321]/20 focus:border-[#FF6321]"
+                      />
+                    </div>
+                    <p className="text-[10px] text-[#1A1A1A]/40 italic">
+                      * Kết hợp Thể loại, Cảm xúc và Thuật ngữ giúp AI dịch sát nghĩa và đồng nhất hơn.
+                    </p>
+                  </div>
                 </div>
               </motion.div>
             )}
