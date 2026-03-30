@@ -1,21 +1,29 @@
 import { GoogleGenAI } from "@google/genai";
 
-// Parse multiple API keys from environment variable (comma-separated)
-const apiKeys = (process.env.GEMINI_API_KEY || "").split(",").map(k => k.trim()).filter(k => k !== "");
-
-// Fallback to a single key if only one is provided
-const getAIInstance = (index: number) => {
-  if (apiKeys.length === 0) {
-    throw new Error("No API keys found. Please check your .env file.");
-  }
-  const key = apiKeys[index % apiKeys.length];
-  return new GoogleGenAI({ apiKey: key });
-};
+// Parse multiple API keys from environment variable (newline or comma separated)
+const apiKeys = (process.env.GEMINI_API_KEY || "")
+  .split(/[\n,]/)
+  .map(k => k.trim())
+  .filter(k => k !== "");
 
 export interface SubtitleBlock {
   index: string;
   timestamp: string;
   text: string;
+}
+
+export async function checkApiKey(key: string): Promise<boolean> {
+  try {
+    const ai = new GoogleGenAI({ apiKey: key });
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: [{ parts: [{ text: "Hi" }] }],
+    });
+    return !!response.text;
+  } catch (error) {
+    console.error("Key check failed:", error);
+    return false;
+  }
 }
 
 export function parseSRT(content: string): SubtitleBlock[] {
@@ -42,14 +50,29 @@ export function stringifySRT(blocks: SubtitleBlock[]): string {
 
 export async function translateSubtitleBlocks(
   blocks: SubtitleBlock[],
-  onProgress: (progress: number) => void
+  onProgress: (progress: number) => void,
+  customApiKey?: string
 ): Promise<SubtitleBlock[]> {
-  const batchSize = 15; // Adjust batch size to avoid token limits
+  const batchSize = 15;
   const translatedBlocks: SubtitleBlock[] = [];
+
+  // Use custom key if provided, otherwise fallback to env keys
+  const activeKeys = customApiKey 
+    ? customApiKey.split(/[\n,]/).map(k => k.trim()).filter(k => k !== "")
+    : (process.env.GEMINI_API_KEY || "").split(/[\n,]/).map(k => k.trim()).filter(k => k !== "");
+
+  if (activeKeys.length === 0) {
+    throw new Error("Vui lòng nhập API Key trong phần cài đặt.");
+  }
+
+  const getAI = (index: number) => {
+    const key = activeKeys[index % activeKeys.length];
+    return new GoogleGenAI({ apiKey: key });
+  };
 
   for (let i = 0; i < blocks.length; i += batchSize) {
     const batchIndex = Math.floor(i / batchSize);
-    const ai = getAIInstance(batchIndex); // Rotate API key for each batch
+    const ai = getAI(batchIndex);
     
     const batch = blocks.slice(i, i + batchSize);
     const textsToTranslate = batch.map((b) => b.text);

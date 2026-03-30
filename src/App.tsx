@@ -8,11 +8,13 @@ import {
   Loader2, 
   CheckCircle2, 
   AlertCircle,
-  X
+  X,
+  FileUp
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn, playSuccessSound } from "./lib/utils";
-import { parseSRT, stringifySRT, translateSubtitleBlocks } from "./services/srtService";
+import { parseSRT, stringifySRT, translateSubtitleBlocks, checkApiKey } from "./services/srtService";
+import { Settings, Key, CheckCircle2 as CheckIcon, XCircle as ErrorIcon } from "lucide-react";
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
@@ -22,6 +24,10 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem("gemini_api_key") || "");
+  const [showSettings, setShowSettings] = useState(false);
+  const [isCheckingKeys, setIsCheckingKeys] = useState(false);
+  const [keyStatuses, setKeyStatuses] = useState<Record<string, "valid" | "invalid" | "checking" | null>>({});
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const selectedFile = acceptedFiles[0];
@@ -47,6 +53,11 @@ export default function App() {
 
   const handleTranslate = async () => {
     if (!originalContent) return;
+    if (!apiKey && !process.env.GEMINI_API_KEY) {
+      setError("Vui lòng nhập Gemini API Key trong phần cài đặt.");
+      setShowSettings(true);
+      return;
+    }
 
     setIsTranslating(true);
     setProgress(0);
@@ -59,9 +70,11 @@ export default function App() {
         throw new Error("Không tìm thấy nội dung phụ đề hợp lệ trong tệp.");
       }
 
-      const translatedBlocks = await translateSubtitleBlocks(blocks, (p) => {
-        setProgress(p);
-      });
+      const translatedBlocks = await translateSubtitleBlocks(
+        blocks, 
+        (p) => setProgress(p),
+        apiKey
+      );
 
       const result = stringifySRT(translatedBlocks);
       setTranslatedContent(result);
@@ -72,6 +85,49 @@ export default function App() {
     } finally {
       setIsTranslating(false);
     }
+  };
+
+  const saveApiKey = (val: string) => {
+    setApiKey(val);
+    localStorage.setItem("gemini_api_key", val);
+    // Reset statuses when keys change
+    setKeyStatuses({});
+  };
+
+  const handleCheckKeys = async () => {
+    const keys = apiKey.split(/[\n,]/).map(k => k.trim()).filter(k => k !== "");
+    if (keys.length === 0) return;
+
+    setIsCheckingKeys(true);
+    const newStatuses: Record<string, "valid" | "invalid" | "checking" | null> = {};
+    
+    for (const key of keys) {
+      setKeyStatuses(prev => ({ ...prev, [key]: "checking" }));
+      const isValid = await checkApiKey(key);
+      setKeyStatuses(prev => ({ ...prev, [key]: isValid ? "valid" : "invalid" }));
+    }
+    setIsCheckingKeys(false);
+  };
+
+  const handleImportKeys = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      if (content) {
+        const newKeys = content.split(/[\n,]/).map(k => k.trim()).filter(k => k !== "");
+        const currentKeys = apiKey.split(/[\n,]/).map(k => k.trim()).filter(k => k !== "");
+        
+        // Merge and remove duplicates
+        const mergedKeys = Array.from(new Set([...currentKeys, ...newKeys]));
+        saveApiKey(mergedKeys.join("\n"));
+      }
+    };
+    reader.readAsText(file);
+    // Reset input
+    e.target.value = "";
   };
 
   const downloadSRT = () => {
@@ -106,13 +162,104 @@ export default function App() {
           </div>
           <h1 className="text-xl font-semibold tracking-tight">SRT Translator</h1>
         </div>
-        <div className="text-xs uppercase tracking-widest font-medium opacity-50">
-          Powered by Gemini AI
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={() => setShowSettings(!showSettings)}
+            className={cn(
+              "p-2 rounded-full transition-all",
+              showSettings ? "bg-[#FF6321] text-white" : "hover:bg-[#F5F5F0] text-[#1A1A1A]/60"
+            )}
+          >
+            <Settings size={20} />
+          </button>
+          <div className="text-xs uppercase tracking-widest font-medium opacity-50 hidden sm:block">
+            Powered by Gemini AI
+          </div>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-6 py-12">
         <div className="space-y-12">
+          {/* Settings Panel */}
+          <AnimatePresence>
+            {showSettings && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="bg-[#F5F5F0] rounded-3xl p-6 space-y-4 border border-[#1A1A1A]/5">
+                  <div className="flex items-center justify-between gap-2 text-sm font-bold uppercase tracking-wider opacity-60">
+                    <div className="flex items-center gap-2">
+                      <Key size={14} />
+                      Cấu hình API Key
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer hover:text-[#FF6321] transition-colors text-[10px]">
+                      <FileUp size={14} />
+                      Tải lên file .txt
+                      <input 
+                        type="file" 
+                        accept=".txt" 
+                        className="hidden" 
+                        onChange={handleImportKeys}
+                      />
+                    </label>
+                  </div>
+                  <div className="space-y-3">
+                    <textarea 
+                      value={apiKey}
+                      onChange={(e) => saveApiKey(e.target.value)}
+                      placeholder="Dán danh sách API Key (mỗi dòng một key)..."
+                      rows={4}
+                      className="w-full bg-white border border-[#1A1A1A]/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#FF6321]/20 focus:border-[#FF6321] font-mono"
+                    />
+                    <button
+                      onClick={handleCheckKeys}
+                      disabled={isCheckingKeys || !apiKey.trim()}
+                      className="w-full bg-[#1A1A1A] text-white py-3 rounded-xl text-sm font-medium hover:bg-[#333] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {isCheckingKeys ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <CheckCircle2 size={16} />
+                      )}
+                      Kiểm tra danh sách Key
+                    </button>
+                  </div>
+                  
+                  {Object.keys(keyStatuses).length > 0 && (
+                    <div className="space-y-2 mt-4">
+                      <p className="text-[10px] font-bold uppercase tracking-wider opacity-40">Trạng thái Key:</p>
+                      <div className="max-h-32 overflow-y-auto space-y-1 pr-2">
+                        {Object.entries(keyStatuses).map(([key, status]) => (
+                          <div key={key} className="flex items-center justify-between text-[11px] bg-white/50 p-2 rounded-lg border border-[#1A1A1A]/5">
+                            <span className="font-mono opacity-60 truncate max-w-[200px]">{key}</span>
+                            <span className={cn(
+                              "flex items-center gap-1 font-medium",
+                              status === "valid" && "text-green-600",
+                              status === "invalid" && "text-red-600",
+                              status === "checking" && "text-blue-600 animate-pulse",
+                            )}>
+                              {status === "valid" && <CheckIcon size={12} />}
+                              {status === "invalid" && <ErrorIcon size={12} />}
+                              {status === "checking" && <Loader2 size={12} className="animate-spin" />}
+                              {status === "valid" ? "Hoạt động" : status === "invalid" ? "Lỗi/Hết hạn" : "Đang kiểm tra..."}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-[#1A1A1A]/40 italic">
+                    * Bạn có thể nhập nhiều Key (mỗi dòng 1 key) để tăng tốc độ dịch và tránh bị giới hạn.
+                  </p>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* Hero Section */}
           <section className="text-center space-y-4">
             <h2 className="text-5xl font-light tracking-tighter leading-tight">
@@ -122,6 +269,7 @@ export default function App() {
               Tải lên tệp .srt của bạn và chúng tôi sẽ dịch nó sang tiếng Việt trong khi vẫn giữ nguyên cấu trúc thời gian.
             </p>
           </section>
+
 
           {/* Upload Area */}
           {!file ? (
