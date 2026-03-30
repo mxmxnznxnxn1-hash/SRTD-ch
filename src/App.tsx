@@ -6,18 +6,22 @@ import {
   Download, 
   Languages, 
   Loader2, 
-  CheckCircle2, 
+  CheckCircle2,
+  CheckCircle2 as CheckIcon,
   AlertCircle,
   X,
   FileUp,
   Info,
   Sparkles,
-  Smile
+  Smile,
+  Settings,
+  Key,
+  XCircle as ErrorIcon
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn, playSuccessSound } from "./lib/utils";
 import { parseSRT, stringifySRT, translateSubtitleBlocks, checkApiKey } from "./services/srtService";
-import { Settings, Key, CheckCircle2 as CheckIcon, XCircle as ErrorIcon } from "lucide-react";
+import confetti from "canvas-confetti";
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
@@ -25,6 +29,8 @@ export default function App() {
   const [translatedBlocks, setTranslatedBlocks] = useState<any[]>([]);
   const [translatedContent, setTranslatedContent] = useState<string>("");
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isAutomatedMode, setIsAutomatedMode] = useState(false);
+  const [shouldStop, setShouldStop] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -68,47 +74,90 @@ export default function App() {
     }
 
     setIsTranslating(true);
+    setIsAutomatedMode(true);
+    setShouldStop(false);
     setProgress(0);
     setError(null);
     setSuccess(false);
 
     try {
-      let blocks = [];
+      let currentBlocks = [];
       if (retryOnly && translatedBlocks.length > 0) {
-        blocks = [...translatedBlocks];
+        currentBlocks = [...translatedBlocks];
       } else {
-        blocks = parseSRT(originalContent);
+        currentBlocks = parseSRT(originalContent);
       }
 
-      if (blocks.length === 0) {
+      if (currentBlocks.length === 0) {
         throw new Error("Không tìm thấy nội dung phụ đề hợp lệ trong tệp.");
       }
 
-      const resultBlocks = await translateSubtitleBlocks(
-        blocks, 
-        (p) => setProgress(p),
-        apiKey,
-        context,
-        genre,
-        tone,
-        retryOnly
-      );
+      let iteration = 0;
+      const maxAutoRetries = 100; // Truly persistent for "treo máy"
+      let allTranslated = false;
 
-      setTranslatedBlocks(resultBlocks);
-      const result = stringifySRT(resultBlocks);
-      setTranslatedContent(result);
-      
-      const untranslatedCount = resultBlocks.filter(b => !b.isTranslated).length;
-      if (untranslatedCount > 0) {
-        setError(`Còn ${untranslatedCount} đoạn chưa được dịch do lỗi. Bạn có thể nhấn "Dịch tiếp" để thử lại.`);
-      } else {
-        setSuccess(true);
-        playSuccessSound();
+      while (iteration < maxAutoRetries && !allTranslated && !shouldStop) {
+        iteration++;
+        const resultBlocks = await translateSubtitleBlocks(
+          currentBlocks, 
+          (p) => setProgress(p),
+          apiKey,
+          context,
+          genre,
+          tone,
+          iteration > 1 || retryOnly
+        );
+
+        currentBlocks = resultBlocks;
+        setTranslatedBlocks(resultBlocks);
+        const result = stringifySRT(resultBlocks);
+        setTranslatedContent(result);
+
+        const untranslatedCount = resultBlocks.filter(b => !b.isTranslated).length;
+        if (untranslatedCount === 0) {
+          allTranslated = true;
+          setSuccess(true);
+          playSuccessSound();
+          // Play sound twice for better notification
+          setTimeout(playSuccessSound, 600);
+          
+          // Confetti celebration!
+          confetti({
+            particleCount: 150,
+            spread: 70,
+            origin: { y: 0.6 },
+            colors: ["#FF6321", "#1A1A1A", "#FDFCFB"]
+          });
+        } else if (shouldStop) {
+          setError("Đã dừng quá trình dịch tự động.");
+          break;
+        } else {
+          // If we still have untranslated blocks, wait a bit before auto-retrying
+          if (iteration < maxAutoRetries) {
+            setError(`Vòng ${iteration}: Còn ${untranslatedCount} đoạn chưa dịch. Đang tự động thử lại sau 10 giây...`);
+            
+            // Check shouldStop periodically during sleep
+            for (let s = 0; s < 10; s++) {
+              if (shouldStop) break;
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            if (shouldStop) {
+              setError("Đã dừng quá trình dịch tự động.");
+              break;
+            }
+          } else {
+            setError(`Đã thử ${maxAutoRetries} lần nhưng vẫn còn ${untranslatedCount} đoạn chưa dịch. Bạn có thể nhấn "Dịch tiếp" để thử lại thủ công.`);
+          }
+        }
       }
     } catch (err: any) {
-      setError(err.message || "Đã xảy ra lỗi trong quá trình dịch.");
+      if (err.message !== "STOPPED") {
+        setError(err.message || "Đã xảy ra lỗi trong quá trình dịch.");
+      }
     } finally {
       setIsTranslating(false);
+      setIsAutomatedMode(false);
+      setShouldStop(false);
     }
   };
 
@@ -452,7 +501,7 @@ export default function App() {
                   <div className="flex items-center justify-between text-sm font-medium">
                     <span className="flex items-center gap-2">
                       <Loader2 size={16} className="animate-spin text-[#FF6321]" />
-                      Đang dịch...
+                      {isAutomatedMode ? "Chế độ Tự động hóa: Đang dịch..." : "Đang dịch..."}
                     </span>
                     <span>{progress}%</span>
                   </div>
@@ -464,9 +513,21 @@ export default function App() {
                       transition={{ duration: 0.5 }}
                     />
                   </div>
-                  <p className="text-center text-sm text-[#1A1A1A]/40 italic">
-                    Vui lòng không đóng tab này trong khi quá trình đang diễn ra.
-                  </p>
+                  <div className="bg-[#FF6321]/5 p-4 rounded-2xl border border-[#FF6321]/10 flex flex-col gap-4">
+                    <div className="flex items-center gap-3">
+                      <Sparkles size={18} className="text-[#FF6321] animate-pulse" />
+                      <p className="text-xs text-[#1A1A1A]/60 leading-relaxed">
+                        <strong>Chế độ Treo máy:</strong> Ứng dụng sẽ tự động thử lại nếu gặp lỗi cho đến khi dịch xong 100%. Bạn có thể yên tâm làm việc khác!
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setShouldStop(true)}
+                      className="w-full bg-red-50 text-red-600 py-2 rounded-xl text-xs font-bold hover:bg-red-100 transition-all flex items-center justify-center gap-2"
+                    >
+                      <X size={14} />
+                      Dừng quá trình tự động
+                    </button>
+                  </div>
                 </div>
               ) : success ? (
                 <div className="space-y-8">
