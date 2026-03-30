@@ -28,6 +28,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [isCheckingKeys, setIsCheckingKeys] = useState(false);
   const [keyStatuses, setKeyStatuses] = useState<Record<string, "valid" | "invalid" | "checking" | null>>({});
+  const [checkSummary, setCheckSummary] = useState<string | null>(null);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const selectedFile = acceptedFiles[0];
@@ -90,8 +91,9 @@ export default function App() {
   const saveApiKey = (val: string) => {
     setApiKey(val);
     localStorage.setItem("gemini_api_key", val);
-    // Reset statuses when keys change
+    // Reset statuses and summary when keys change
     setKeyStatuses({});
+    setCheckSummary(null);
   };
 
   const handleCheckKeys = async () => {
@@ -100,13 +102,25 @@ export default function App() {
 
     setIsCheckingKeys(true);
     const newStatuses: Record<string, "valid" | "invalid" | "checking" | null> = {};
+    let validCount = 0;
+    let invalidCount = 0;
     
     for (const key of keys) {
       setKeyStatuses(prev => ({ ...prev, [key]: "checking" }));
       const isValid = await checkApiKey(key);
+      if (isValid) validCount++;
+      else invalidCount++;
       setKeyStatuses(prev => ({ ...prev, [key]: isValid ? "valid" : "invalid" }));
     }
     setIsCheckingKeys(false);
+    
+    // Show summary message
+    const summary = `Kiểm tra hoàn tất: ${validCount} Key hoạt động, ${invalidCount} Key lỗi.`;
+    setCheckSummary(summary);
+    
+    if (validCount === 0 && invalidCount > 0) {
+      setError(summary);
+    }
   };
 
   const handleImportKeys = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -227,6 +241,18 @@ export default function App() {
                       Kiểm tra danh sách Key
                     </button>
                   </div>
+                  
+                  {checkSummary && (
+                    <div className={cn(
+                      "p-3 rounded-xl text-xs font-medium flex items-center gap-2",
+                      checkSummary.includes("0 Key hoạt động") 
+                        ? "bg-red-50 text-red-600 border border-red-100" 
+                        : "bg-green-50 text-green-600 border border-green-100"
+                    )}>
+                      {checkSummary.includes("0 Key hoạt động") ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
+                      {checkSummary}
+                    </div>
+                  )}
                   
                   {Object.keys(keyStatuses).length > 0 && (
                     <div className="space-y-2 mt-4">
