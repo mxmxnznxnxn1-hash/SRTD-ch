@@ -10,6 +10,7 @@ export interface SubtitleBlock {
   index: string;
   timestamp: string;
   text: string;
+  isTranslated?: boolean;
 }
 
 export async function checkApiKey(key: string): Promise<boolean> {
@@ -36,7 +37,7 @@ export function parseSRT(content: string): SubtitleBlock[] {
       const index = lines[0].trim();
       const timestamp = lines[1].trim();
       const text = lines.slice(2).join("\n").trim();
-      blocks.push({ index, timestamp, text });
+      blocks.push({ index, timestamp, text, isTranslated: false });
     }
   }
   return blocks;
@@ -54,10 +55,11 @@ export async function translateSubtitleBlocks(
   customApiKey?: string,
   context?: string,
   genre?: string,
-  tone?: string
+  tone?: string,
+  onlyUntranslated = false
 ): Promise<SubtitleBlock[]> {
   const batchSize = 30; // Increased batch size
-  const translatedBlocks: SubtitleBlock[] = new Array(blocks.length);
+  const translatedBlocks: SubtitleBlock[] = [...blocks];
   
   const activeKeys = customApiKey 
     ? customApiKey.split(/[\n,]/).map(k => k.trim()).filter(k => k !== "")
@@ -103,6 +105,7 @@ ${textsToTranslate.join("\n|||\n")}
         translatedBlocks[startIndex + index] = {
           ...block,
           text: translations[index] || block.text,
+          isTranslated: !!translations[index],
         };
       });
     } catch (error: any) {
@@ -121,7 +124,7 @@ ${textsToTranslate.join("\n|||\n")}
 
       // Final fallback: keep original text
       batch.forEach((block, index) => {
-        translatedBlocks[startIndex + index] = { ...block };
+        translatedBlocks[startIndex + index] = { ...block, isTranslated: false };
       });
       console.error(`Failed to translate batch at ${startIndex} after ${attempt} attempts:`, error);
     }
@@ -131,14 +134,26 @@ ${textsToTranslate.join("\n|||\n")}
   const maxConcurrency = activeKeys.length;
   const batches = [];
   for (let i = 0; i < blocks.length; i += batchSize) {
+    const batch = blocks.slice(i, i + batchSize);
+    
+    // If onlyUntranslated is true, skip batches where all blocks are already translated
+    if (onlyUntranslated && batch.every(b => b.isTranslated)) {
+      continue;
+    }
+
     batches.push({
-      batch: blocks.slice(i, i + batchSize),
+      batch,
       index: i
     });
   }
 
   let completed = 0;
   const totalBatches = batches.length;
+
+  if (totalBatches === 0) {
+    onProgress(100);
+    return translatedBlocks;
+  }
 
   // Process in chunks to avoid overwhelming the system
   for (let i = 0; i < totalBatches; i += maxConcurrency) {

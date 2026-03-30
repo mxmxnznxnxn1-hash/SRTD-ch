@@ -22,6 +22,7 @@ import { Settings, Key, CheckCircle2 as CheckIcon, XCircle as ErrorIcon } from "
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [originalContent, setOriginalContent] = useState<string>("");
+  const [translatedBlocks, setTranslatedBlocks] = useState<any[]>([]);
   const [translatedContent, setTranslatedContent] = useState<string>("");
   const [isTranslating, setIsTranslating] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -58,7 +59,7 @@ export default function App() {
     multiple: false,
   } as any);
 
-  const handleTranslate = async () => {
+  const handleTranslate = async (retryOnly = false) => {
     if (!originalContent) return;
     if (!apiKey && !process.env.GEMINI_API_KEY) {
       setError("Vui lòng nhập Gemini API Key trong phần cài đặt.");
@@ -72,24 +73,38 @@ export default function App() {
     setSuccess(false);
 
     try {
-      const blocks = parseSRT(originalContent);
+      let blocks = [];
+      if (retryOnly && translatedBlocks.length > 0) {
+        blocks = [...translatedBlocks];
+      } else {
+        blocks = parseSRT(originalContent);
+      }
+
       if (blocks.length === 0) {
         throw new Error("Không tìm thấy nội dung phụ đề hợp lệ trong tệp.");
       }
 
-      const translatedBlocks = await translateSubtitleBlocks(
+      const resultBlocks = await translateSubtitleBlocks(
         blocks, 
         (p) => setProgress(p),
         apiKey,
         context,
         genre,
-        tone
+        tone,
+        retryOnly
       );
 
-      const result = stringifySRT(translatedBlocks);
+      setTranslatedBlocks(resultBlocks);
+      const result = stringifySRT(resultBlocks);
       setTranslatedContent(result);
-      setSuccess(true);
-      playSuccessSound();
+      
+      const untranslatedCount = resultBlocks.filter(b => !b.isTranslated).length;
+      if (untranslatedCount > 0) {
+        setError(`Còn ${untranslatedCount} đoạn chưa được dịch do lỗi. Bạn có thể nhấn "Dịch tiếp" để thử lại.`);
+      } else {
+        setSuccess(true);
+        playSuccessSound();
+      }
     } catch (err: any) {
       setError(err.message || "Đã xảy ra lỗi trong quá trình dịch.");
     } finally {
@@ -184,6 +199,7 @@ export default function App() {
   const reset = () => {
     setFile(null);
     setOriginalContent("");
+    setTranslatedBlocks([]);
     setTranslatedContent("");
     setProgress(0);
     setSuccess(false);
@@ -474,9 +490,33 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+              ) : translatedBlocks.some(b => !b.isTranslated) && translatedBlocks.length > 0 ? (
+                <div className="space-y-4">
+                  <button
+                    onClick={() => handleTranslate(true)}
+                    className="w-full bg-[#FF6321] text-white py-5 rounded-2xl font-semibold text-lg hover:bg-[#E5591D] transition-all shadow-lg shadow-[#FF6321]/20 active:scale-[0.99]"
+                  >
+                    Dịch tiếp các đoạn lỗi ({translatedBlocks.filter(b => !b.isTranslated).length})
+                  </button>
+                  <div className="grid grid-cols-2 gap-4">
+                    <button
+                      onClick={downloadSRT}
+                      className="flex items-center justify-center gap-2 bg-[#1A1A1A] text-white py-4 rounded-2xl font-medium hover:bg-[#333] transition-all active:scale-[0.98]"
+                    >
+                      <Download size={20} />
+                      Tải bản hiện tại
+                    </button>
+                    <button
+                      onClick={reset}
+                      className="flex items-center justify-center gap-2 border border-[#1A1A1A]/10 py-4 rounded-2xl font-medium hover:bg-[#F5F5F0] transition-all active:scale-[0.98]"
+                    >
+                      Hủy và làm lại
+                    </button>
+                  </div>
+                </div>
               ) : (
                 <button
-                  onClick={handleTranslate}
+                  onClick={() => handleTranslate(false)}
                   disabled={isTranslating}
                   className="w-full bg-[#FF6321] text-white py-5 rounded-2xl font-semibold text-lg hover:bg-[#E5591D] transition-all shadow-lg shadow-[#FF6321]/20 active:scale-[0.99]"
                 >
